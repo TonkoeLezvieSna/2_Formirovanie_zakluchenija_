@@ -3421,17 +3421,31 @@ def check_gender(card_data, txt_data):
     if gender_from_parents and gender_from_amel and gender_from_parents != gender_from_amel:
         raise ValueError(f"Несоответствие данных о поле подэкспертного: родители указывают на {gender_from_parents}, локус AMEL указывает на {gender_from_amel}.")
 
-def extract_case_number_from_image(image_path, working_materials_folder, delete_debug_files=True):
+def extract_case_number_from_image(image_path, working_materials_folder, delete_debug_files=True, template_name=None):
     """
     Извлечение номера заключения с комбинированным подходом.
     Использует несколько методов поиска рамки и улучшенную обработку.
+    
+    :param template_name: Название шаблона из строки 1 Карты. Если шаблон относится к СВО_Ростов,
+                          анализируется всё изображение, а не только верхний левый квадрант.
     """
     temp_roi_path = None
     temp_cropped_path = None
     temp_debug_files = []
     
+    # Список шаблонов СВО_Ростов, требующих анализа всего изображения
+    SVO_ROSTOV_TEMPLATES = [
+        "СВО_Ростов_образец_родственники",
+        "СВО_Ростов_образец_прямая идентификация",
+        "СВО_Ростов_образец_родственники_нет результата_RT",
+        "СВО_Ростов_образец_родственники_нет результата_форез",
+        "СВО_Ростов_образец_прямая идентификация_нет результата_форез",
+        "СВО_Ростов_образец_прямая идентификация_нет результата_RT"
+    ]
+    
     try:
         logger.info(f"Начало обработки изображения (комбинированный метод): {image_path}")
+        logger.info(f"Название шаблона: {template_name}")
         
         # 1. Загрузка и предобработка оригинального изображения
         original_image_pil = Image.open(image_path)
@@ -3439,19 +3453,30 @@ def extract_case_number_from_image(image_path, working_materials_folder, delete_
         original_image = cv2.cvtColor(original_image, cv2.COLOR_RGB2BGR)
         logger.debug(f"Оригинальное изображение загружено. Размер: {original_image.shape}")
 
-        # 2. Обрезка до верхнего левого квадранта
-        height, width = original_image.shape[:2]
-        half_width = width // 2
-        half_height = height // 2
-        cropped_image = original_image[0:half_height, 0:half_width]
-        logger.info(f"Изображение обрезано до верхнего левого квадранта. Новый размер: {cropped_image.shape}")
+        # 2. Проверка типа шаблона и обрезка изображения
+        is_svo_template = template_name in SVO_ROSTOV_TEMPLATES if template_name else False
         
-        # Сохраняем обрезанное изображение
+        if is_svo_template:
+            logger.info(f"Обнаружен шаблон СВО_Ростов: '{template_name}'. Будет проанализировано ВСЁ изображение.")
+            cropped_image = original_image.copy()
+            logger.info(f"Изображение НЕ обрезается (полный размер). Размер: {cropped_image.shape}")
+        else:
+            logger.info(f"Шаблон '{template_name}' не относится к СВО_Ростов. Обрезка до верхнего левого квадранта.")
+            height, width = original_image.shape[:2]
+            half_width = width // 2
+            half_height = height // 2
+            cropped_image = original_image[0:half_height, 0:half_width]
+            logger.info(f"Изображение обрезано до верхнего левого квадранта. Новый размер: {cropped_image.shape}")
+        
+        # Сохраняем обрезанное изображение для отладки
         cropped_image_pil = Image.fromarray(cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB))
-        temp_cropped_path = Path(working_materials_folder) / "temp_cropped_quadrant_DEBUG.jpg"
+        if is_svo_template:
+            temp_cropped_path = Path(working_materials_folder) / "temp_full_image_DEBUG.jpg"
+        else:
+            temp_cropped_path = Path(working_materials_folder) / "temp_cropped_quadrant_DEBUG.jpg"
         cropped_image_pil.save(temp_cropped_path)
         temp_debug_files.append(temp_cropped_path)  # Добавляем в список для удаления
-        logger.info(f"Сохранено обрезанное изображение для отладки: {temp_cropped_path}")
+        logger.info(f"Сохранено изображение для отладки: {temp_cropped_path}")
         
         # 3. Подготовка изображения в градациях серого для обработки
         gray_cropped = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
@@ -3776,12 +3801,16 @@ def extract_case_number_from_foregram(foregram_path):
 def check_case_number(card_data, txt_path, image_path, foregram_path, working_materials_folder): # Добавлен аргумент
     """
     Проверяет консистентность номера заключения в Карте, фотографии, фореграмме и файле .txt.
-    Теперь передает working_materials_folder в extract_case_number_from_image.
+    Теперь передает working_materials_folder и template_name в extract_case_number_from_image.
     """
+    # Извлекаем номер шаблона из строки 1 Карты
+    template_name = card_data.get("1")
+    logger.info(f"Название шаблона из Карты (строка 1): {template_name}")
+    
     # Извлекаем номера
     case_number_from_card_raw = card_data.get("НОМ")
-    # Передаем working_materials_folder
-    case_number_from_image_raw = extract_case_number_from_image(image_path, working_materials_folder)
+    # Передаем working_materials_folder и template_name
+    case_number_from_image_raw = extract_case_number_from_image(image_path, working_materials_folder, template_name=template_name)
     case_number_from_foregram_raw = extract_case_number_from_foregram(foregram_path)
     case_number_from_txt_raw = extract_case_number_from_txt_filename(txt_path)
     # Отладочный вывод "сырых" значений
